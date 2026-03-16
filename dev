@@ -1,0 +1,166 @@
+import pandas as pd
+from openpyxl import Workbook, load_workbook
+from openpyxl.formula.translate import Translator
+
+import win32com.client
+from pptx import Presentation
+from pptx.util import Inches
+import tempfile
+import os
+
+# Import an Excel workbook
+def import_workbook(file_path):
+    try:
+        workbook = load_workbook(filename=file_path)
+        print(f"Workbook '{file_path}' imported successfully.")
+        return workbook
+    except Exception as e:
+        print(f"Error importing workbook: {e}")
+        return None
+    
+# get spectific worksheet
+def get_worksheet(workbook, sheet_name):
+    try:
+        worksheet = workbook[sheet_name]
+        print(f"Worksheet '{sheet_name}' accessed successfully.")
+        return worksheet
+    except KeyError:
+        print(f"Worksheet '{sheet_name}' not found in the workbook.")
+        return None
+
+# Create a new column for the previous month along with the formulas
+def extend_last_column(file_path, sheet_name):
+    """
+    Copies the last column of a worksheet to a new column on the right,
+    updating formulas as if dragged in Excel.
+    """
+
+    wb = load_workbook(file_path)
+    ws = wb[sheet_name]
+
+    last_col = ws.max_column
+    new_col = last_col + 1
+
+    for row in range(1, ws.max_row + 1):
+        source_cell = ws.cell(row=row, column=last_col)
+        target_cell = ws.cell(row=row, column=new_col)
+
+        if source_cell.value and isinstance(source_cell.value, str) and source_cell.value.startswith("="):
+            # Translate formula relative to new position
+            target_cell.value = Translator(
+                source_cell.value,
+                origin=source_cell.coordinate
+            ).translate_formula(target_cell.coordinate)
+        else:
+            target_cell.value = source_cell.value
+
+    wb.save(file_path)
+
+# Copy data from a specific cell
+def copy_cell(source_file, source_sheet, source_cell,
+              target_file, target_sheet, target_cell):
+    """
+    Copy a cell value from one Excel workbook to another.
+
+    Parameters:
+    source_file (str): path to source workbook
+    source_sheet (str): sheet name in source workbook
+    source_cell (str): cell reference (e.g., 'A1')
+
+    target_file (str): path to destination workbook
+    target_sheet (str): sheet name in destination workbook
+    target_cell (str): cell reference (e.g., 'B2')
+    """
+
+    # Load source workbook
+    src_wb = load_workbook(source_file, data_only=True)
+    src_ws = src_wb[source_sheet]
+
+    value = src_ws[source_cell].value
+
+    # Load target workbook
+    tgt_wb = load_workbook(target_file)
+    tgt_ws = tgt_wb[target_sheet]
+
+    # Write value
+    tgt_ws[target_cell] = value
+
+    # Save target workbook
+    tgt_wb.save(target_file)
+
+    print(f"Copied value '{value}' from {source_sheet}!{source_cell} → {target_sheet}!{target_cell}")
+
+# Insert an Excel chart into PowerPoint
+def excel_chart_to_ppt(
+    excel_file,
+    chart_name,
+    sheet_name,
+    ppt_template,
+    slide_index,
+    width,
+    height,
+    left,
+    top,
+    output_ppt
+):
+    """
+    Insert a named Excel chart into a PowerPoint slide.
+
+    Parameters
+    ----------
+    excel_file : str
+        Path to Excel workbook
+    chart_name : str
+        Name of the chart in Excel
+    sheet_name : str
+        Worksheet containing the chart
+    ppt_template : str
+        Path to PowerPoint template (.pptx)
+    slide_index : int
+        Slide number (0-based index)
+    width : float
+        Chart width (in inches)
+    height : float
+        Chart height (in inches)
+    left : float
+        Horizontal position on slide (in inches)
+    top : float
+        Vertical position on slide (in inches)
+    output_ppt : str
+        Path to save final presentation
+    """
+
+    # Start Excel
+    excel = win32com.client.Dispatch("Excel.Application")
+    wb = excel.Workbooks.Open(os.path.abspath(excel_file))
+    ws = wb.Worksheets(sheet_name)
+
+    # Get chart by name
+    chart = ws.ChartObjects(chart_name)
+
+    # Export chart as image
+    temp_file = os.path.join(tempfile.gettempdir(), f"{chart_name}.png")
+    chart.Chart.Export(temp_file)
+
+    wb.Close(False)
+    excel.Quit()
+
+    # Open PowerPoint template
+    prs = Presentation(ppt_template)
+
+    slide = prs.slides[slide_index]
+
+    slide.shapes.add_picture(
+        temp_file,
+        Inches(left),
+        Inches(top),
+        width=Inches(width),
+        height=Inches(height)
+    )
+
+    prs.save(output_ppt)
+
+    # Cleanup
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+
